@@ -3,6 +3,7 @@ library(readr)
 library(maps)
 library(ggmap)
 library(dplyr)
+library(geosphere)
 library(tidygeocoder)
 library(tidyr)
 library(viridis)
@@ -31,6 +32,7 @@ uszips$zip <- ifelse(
          paste0("1", uszips$zip), 
          uszips$zip)
 )
+uszips = uszips[,c("zip", "lat", "lng", "city", "state_name")]
 
 tjzips = uszips[uszips$zip %in% zips, ]
 
@@ -118,8 +120,12 @@ head(empl_clean)
 #income census data
 
 incdf = read_csv("ACSST5Y2017.S1903_2024-10-07T194909/ACSST5Y2017.S1903-Data.csv")
-inc_cols = c("S1903_C02_016E", #% Families!!With own children of householder under 18 years
-            "S1903_C03_001E" #Median household income
+inc_cols = c("S1903_C03_001E", #Median household income
+            "S1903_C02_002E", # %white household
+            "S1903_C02_003E", # %black
+            "S1903_C02_004E", # %indigenous
+            "S1903_C02_005E", # %asian
+            "S1903_C02_009E" # %hispanic/latino
             )
 incdf$NAME = substr(incdf$NAME,7,11)
 inc = incdf[, c("NAME", inc_cols)]
@@ -152,12 +158,21 @@ demo_clean[demo_cols] <- lapply(demo_clean[demo_cols], as.numeric)
 demo_clean$femhs = demo_clean[["B15002_028E"]] / demo_clean[["B15002_019E"]]
 demo_clean$malehs = demo_clean[["B15002_011E"]] / demo_clean[["B15002_002E"]]
 demo_clean$mpct = demo_clean[["B15002_002E"]] / (demo_clean[["B15002_002E"]] + demo_clean[["B15002_019E"]]) #percentage male
-demo_clean$fembs = demo_clean[["B15002_032E"]] / demo_clean[["B15002_019E"]]
-demo_clean$malebs = demo_clean[["B15002_015E"]] / demo_clean[["B15002_002E"]]
+demo_clean$fembach = demo_clean[["B15002_032E"]] / demo_clean[["B15002_019E"]]
+demo_clean$malebach = demo_clean[["B15002_015E"]] / demo_clean[["B15002_002E"]]
+demo_clean$hs = with(demo_clean, 
+   (mpct * malehs + (1-mpct) * femhs)*100
+)
+demo_clean$bach = with(demo_clean, 
+   (mpct * malebach + (1-mpct) * fembach)*100
+)
+head(demo_clean[, c("bach", "hs")])
+summary(demo_clean[, c("bach", "hs")]) # check valid pct
 
 # zillow rent data
 rent = read_csv("pricepersqft.csv")
 head(rent)
+dim(rent)
 rent_cols = c("May 2012", "December 2012",
               "May 2013", "December 2013",
               "May 2014", "December 2014",
@@ -177,10 +192,48 @@ rent$avg_diff = (1/9)*((rent[["December 2016"]]-rent[["May 2016"]])+
                       (rent[["May 2013"]]-rent[["December 2012"]])+
                       (rent[["December 2012"]]-rent[["May 2012"]]))
 summary(rent$avg_diff)
+summary(rent$overall_diff)
+
+rent = rent[, c("City", "State", "overall_diff", "avg_diff")]
+
+# get latitude and longitude of each city
+cities = read.csv('worldcities.csv')
+cities = cities[cities$country=="United States", c("city", "lat", "lng")]
+dim(cities)
+rent <- inner_join(rent, cities, by = c("City" = "city"))
+head(rent)
+
+# join on rent from nearest city
+
+find_closest_rent <- function(lat, lon, rent_data) {
+  distances <- distHaversine(cbind(lon, lat), rent_data[, c("lng", "lat")])
+  closest_index <- which.min(distances)
+  rent_data[closest_index, ]
+}
+
+matched_rent <- uszips %>%
+  rowwise() %>%
+  mutate(
+    closest_rent = list(find_closest_rent(lat, lng, rent))
+  ) %>%
+  unnest_wider(closest_rent, names_sep = "_closest")
+
+head(matched_rent)
+exclude <- c("Puerto Rico", "Virgin Islands", "Guam", "American Samoa", "Northern Mariana Islands")
+rent_final = matched_rent[!matched_rent$state_name%in%exclude,]
+head(rent_final)
+rent_final <- rent_final %>% rename (
+  closest_city = closest_rent_closestCity,
+  overall_diff = closest_rent_closestoverall_diff,
+  avg_diff = closest_rent_closestavg_diff
+)
+rent_final <- rent_final %>% select(-closest_rent_closestState, -closest_rent_closestlat, -closest_rent_closestlng)
+head(rent_final)
+
+write.csv(rent_final, "rent.csv", row.names = FALSE)
 
 #inner join into 1 big dataset
 names(uszips)
-uszips = uszips[,c("zip", "lat", "lng", "city", "state_name")]
 dim(uszips)
 
 # rename colnames lol
@@ -207,13 +260,19 @@ head(empl_final)
 dim(empl_final)
 
 inc_final <- inc_clean %>% rename (
-  child = S1903_C02_016E, #% Families!!With own children of householder under 18 years
-  medinc = S1903_C03_001E #Median household income
+  medinc = S1903_C03_001E, #Median household income
+  white = S1903_C02_002E, # %white household
+  black = S1903_C02_003E, # %black
+  indg = S1903_C02_004E, # %indigenous
+  asian = S1903_C02_005E, # %asian
+  hisp = S1903_C02_009E # %hispanic/latino
 )
 head(inc_final)
 dim(inc_final)
 
-demo_final <- demo_clean[, c('NAME', 'femhs', 'malehs', 'mpct', 'fembs', 'malebs')]
+head(demo_clean)
+demo_final <- demo_clean[, c('NAME', 'mpct', 'hs', 'bach')]
+demo_final$mpct = demo_final$mpct*100
 head(demo_final)
 dim(demo_final)
 
@@ -222,10 +281,10 @@ result <- reduce(df_list, ~ inner_join(.x, .y, by = "NAME"))
 names(result)
 dim(result)
 
-df <- inner_join(uszips, result, by = c("zip" = "NAME"))
+head(rent_final)
+df <- inner_join(rent_final, result, by = c("zip" = "NAME"))
 
 head(df)
 dim(df)
 
 write.csv(df, "data.csv", row.names = FALSE)
-
