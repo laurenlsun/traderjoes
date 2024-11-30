@@ -1,4 +1,5 @@
 library(ggplot2)
+library(readr)
 library(maps)
 library(ggmap)
 library(dplyr)
@@ -6,6 +7,7 @@ library(tidygeocoder)
 library(tidyr)
 library(viridis)
 library(sf)
+library(purrr)
 
 setwd("C:/Users/llaur/Downloads")
 tjs = read_csv("store_info.csv")
@@ -59,7 +61,7 @@ zip_shapefile <- zip_shapefile %>%
   left_join(uszips, by = c("ZCTA5CE10" = "zip"))
 
 ggplot(zip_shapefile) +
-  # geom_sf(aes(fill = density), color = "white", size = 0.1) + 
+  geom_sf(aes(fill = density), color = "white", size = 0.01) + 
   scale_fill_viridis(option = "D", direction = -1, name = "Pop Density") + 
   labs(title = "Pop Density by Zip Code in the Continental US") +
   #geom_point(data = tjzips, aes(x = lng, y = lat), color = "red", size = 1, alpha = 0.7) + 
@@ -116,8 +118,7 @@ head(empl_clean)
 #income census data
 
 incdf = read_csv("ACSST5Y2017.S1903_2024-10-07T194909/ACSST5Y2017.S1903-Data.csv")
-inc_cols = c("S1903_C02_019E", #% Married-couple families!!With own children under 18 years
-            "S1903_C02_016E", #% Families!!With own children of householder under 18 years
+inc_cols = c("S1903_C02_016E", #% Families!!With own children of householder under 18 years
             "S1903_C03_001E" #Median household income
             )
 incdf$NAME = substr(incdf$NAME,7,11)
@@ -146,7 +147,13 @@ demo_clean <- demo[!apply(demo[, demo_cols],
                         1, function(x) any(grepl("[^0-9.]", x))), ]
 dim(demo_clean)
 demo_clean[demo_cols] <- lapply(demo_clean[demo_cols], as.numeric)
-head(demo_clean)
+
+# get percentages
+demo_clean$femhs = demo_clean[["B15002_028E"]] / demo_clean[["B15002_019E"]]
+demo_clean$malehs = demo_clean[["B15002_011E"]] / demo_clean[["B15002_002E"]]
+demo_clean$mpct = demo_clean[["B15002_002E"]] / (demo_clean[["B15002_002E"]] + demo_clean[["B15002_019E"]]) #percentage male
+demo_clean$fembs = demo_clean[["B15002_032E"]] / demo_clean[["B15002_019E"]]
+demo_clean$malebs = demo_clean[["B15002_015E"]] / demo_clean[["B15002_002E"]]
 
 # zillow rent data
 rent = read_csv("pricepersqft.csv")
@@ -159,26 +166,66 @@ rent_cols = c("May 2012", "December 2012",
               )
 rent = rent[, c("City", "State", rent_cols)]
 rent$min_rent = apply(rent[, rent_cols], 1, min)
+rent$overall_diff = rent[["December 2016"]]-rent[["May 2012"]]
+rent$avg_diff = (1/9)*((rent[["December 2016"]]-rent[["May 2016"]])+
+                     (rent[["May 2016"]]-rent[["December 2015"]])+
+                      (rent[["December 2015"]]-rent[["May 2015"]])+
+                      (rent[["May 2015"]]-rent[["December 2014"]])+
+                      (rent[["December 2014"]]-rent[["May 2014"]])+
+                      (rent[["May 2014"]]-rent[["December 2013"]])+
+                      (rent[["December 2013"]]-rent[["May 2013"]])+
+                      (rent[["May 2013"]]-rent[["December 2012"]])+
+                      (rent[["December 2012"]]-rent[["May 2012"]]))
+summary(rent$avg_diff)
 
-# plot rent increase
-sample_rent <- rent[sample(nrow(rent), 6), ]
+#inner join into 1 big dataset
+names(uszips)
+uszips = uszips[,c("zip", "lat", "lng", "city", "state_name")]
+dim(uszips)
 
-differences <- apply(sample_rent[, c("City", "State", rent_cols)], 2, function(col) col - sample_rent$min_rent)
-differences_df <- data.frame(differences)
+# rename colnames lol
+# ALL PERCENTAGES (except where listed as median)
+age_final <- age_clean %>% rename(
+  au18 = S0101_C02_022E, # age over 18
+  a18to24 = S0101_C02_023E, # age 18-24
+  a25to29 = S0101_C02_007E, 
+  a30to34 = S0101_C02_008E,
+  ao65 = S0101_C02_030E, # age over 65
+  medage = S0101_C01_032E # age median
+)
+age_final$medage <- as.numeric(age_final$medage)
+head(age_final)
+dim(age_final)
 
-# Plot the differences for each column
-ggplot(long_diff, aes(x = column, y = difference, group = row_id, color = as.factor(row_id))) +
-  geom_line() + 
-  geom_point(size = 3) +
-  theme_minimal() +
-  labs(title = "Difference from min_rent for Each Column",
-       x = "Column",
-       y = "Difference from min_rent") +
-  scale_color_viridis_d() +  # Optional: color scale for the rows
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+empl_final <- empl_clean %>% rename(
+  sales = S2406_C02_004E, # over 16yo employed sales and office occupations
+  serv = S2406_C02_003E, # ''' service occupations
+  labor = S2406_C02_005E, # ''' construction, maintenance occupations
+  eo16 = S2406_C02_001E, # employed 16 over
+)
+head(empl_final)
+dim(empl_final)
 
-head(uszips)
+inc_final <- inc_clean %>% rename (
+  child = S1903_C02_016E, #% Families!!With own children of householder under 18 years
+  medinc = S1903_C03_001E #Median household income
+)
+head(inc_final)
+dim(inc_final)
 
+demo_final <- demo_clean[, c('NAME', 'femhs', 'malehs', 'mpct', 'fembs', 'malebs')]
+head(demo_final)
+dim(demo_final)
 
-#get nearest city in zillow rent dataset
+df_list <- list(age_final, empl_final, inc_final, demo_final)
+result <- reduce(df_list, ~ inner_join(.x, .y, by = "NAME"))
+names(result)
+dim(result)
+
+df <- inner_join(uszips, result, by = c("zip" = "NAME"))
+
+head(df)
+dim(df)
+
+write.csv(df, "data.csv", row.names = FALSE)
 
