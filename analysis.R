@@ -13,6 +13,9 @@ library(leaps)
 library(boot)
 library(caret)
 library(tree)
+library(randomForest)
+library(keras)
+library(tensorflow)
 
 set.seed(1)
 
@@ -93,4 +96,75 @@ plot(tree)
 text(tree)
 predictions = predict(tree, df[test_indices,], type = "class")
 
+# bagging
+bag.tj <- randomForest(formula, df[-test_indices,], mtry = 12, importance = TRUE)
+bag.tj
 
+yhat.bag <- predict(bag.tj, newdata = df[test_indices, ])
+predictions <- as.factor(yhat.bag)
+truth <- as.factor(df$tj[test_indices])
+table(Predicted = predictions, Actual = truth)
+
+importance(bag.tj)
+varImpPlot(bag.tj)
+
+
+
+# neural network - no class imbalance
+
+input <- layer_input(shape = c(21))  
+output <- input %>%
+  layer_dense(units = 16, activation = "relu") %>%
+  layer_dropout(rate = 0.4) %>%
+  layer_dense(units = 8, activation = "relu") %>%
+  layer_dropout(rate = 0.3) %>%
+  layer_dense(units = 8, activation = "relu") %>%
+  layer_dropout(rate = 0.3) %>%
+  layer_dense(units = 2, activation = "softmax")
+
+
+modelnn <- keras_model(inputs = input, outputs = output)
+modelnn %>% compile(
+  loss = "categorical_crossentropy",
+  optimizer = optimizer_rmsprop(),
+  metrics = c("accuracy")
+)
+
+x_train <- df[-test_indices, predictors]
+y_train <- df[-test_indices, "tj"]
+
+x_test <- df[test_indices, predictors]
+y_test <- df[test_indices, "tj"]
+
+x_train <- data.matrix(x_train)
+x_test <- data.matrix(x_test)
+
+x_train <- scale(x_train)
+x_test <- scale(x_test)
+
+
+y_train <- to_categorical(as.integer(unlist(y_train)) - 1)
+y_test <- to_categorical(as.integer(unlist(y_test)) - 1)
+
+class(x_train)
+class(x_test)
+class(y_train)
+class(y_test)
+
+dim(y_train)
+
+system.time(
+  history <- modelnn %>%
+    fit(x_train, y_train, epochs = 10, batch_size = 128,
+          validation_split = 0.2)
+  )
+plot(history, smooth = FALSE)
+
+modelnn %>% evaluate(x_test, y_test)
+
+nnpreds <- modelnn %>% predict(x_test)
+predicted_classes <- apply(nnpreds, 1, which.max) - 1  # Subtract 1 if your labels are 0-indexed
+true_classes <- apply(y_test, 1, which.max) - 1  # Subtract 1 for zero-based class labels
+confusionMatrix(as.factor(predicted_classes), as.factor(true_classes))
+
+# fix class imbalance
