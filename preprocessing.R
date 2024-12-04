@@ -25,13 +25,7 @@ uszips = read_csv("uszips.csv")
 uszips$zip = as.character(uszips$zip)
 
 # add leading 0's
-uszips$zip <- ifelse(
-  nchar(uszips$zip) == 3,
-  paste0("00", uszips$zip), 
-  ifelse(nchar(uszips$zip) == 4,
-         paste0("1", uszips$zip), 
-         uszips$zip)
-)
+uszips$zip <- sprintf("%05s", uszips$zip)
 uszips = uszips[,c("zip", "lat", "lng", "city", "state_name")]
 
 tjzips = uszips[uszips$zip %in% zips, ]
@@ -173,28 +167,13 @@ summary(demo_clean[, c("bach", "hs")]) # check valid pct
 rent = read_csv("pricepersqft.csv")
 head(rent)
 dim(rent)
-rent_cols = c("May 2012", "December 2012",
-              "May 2013", "December 2013",
-              "May 2014", "December 2014",
-              "May 2015", "December 2015",
-              "May 2016", "December 2016"
-              )
+rent_cols = c("May 2012", "December 2016")
 rent = rent[, c("City", "State", rent_cols)]
 rent$min_rent = apply(rent[, rent_cols], 1, min)
-rent$overall_diff = rent[["December 2016"]]-rent[["May 2012"]]
-rent$avg_diff = (1/9)*((rent[["December 2016"]]-rent[["May 2016"]])+
-                     (rent[["May 2016"]]-rent[["December 2015"]])+
-                      (rent[["December 2015"]]-rent[["May 2015"]])+
-                      (rent[["May 2015"]]-rent[["December 2014"]])+
-                      (rent[["December 2014"]]-rent[["May 2014"]])+
-                      (rent[["May 2014"]]-rent[["December 2013"]])+
-                      (rent[["December 2013"]]-rent[["May 2013"]])+
-                      (rent[["May 2013"]]-rent[["December 2012"]])+
-                      (rent[["December 2012"]]-rent[["May 2012"]]))
-summary(rent$avg_diff)
-summary(rent$overall_diff)
+rent$diff = rent[["December 2016"]]-rent[["May 2012"]]
+summary(rent$diff)
 
-rent = rent[, c("City", "State", "overall_diff", "avg_diff")]
+rent = rent[, c("City", "State", "diff")]
 
 # get latitude and longitude of each city
 cities = read.csv('worldcities.csv')
@@ -224,13 +203,22 @@ rent_final = matched_rent[!matched_rent$state_name%in%exclude,]
 head(rent_final)
 rent_final <- rent_final %>% rename (
   closest_city = closest_rent_closestCity,
-  overall_diff = closest_rent_closestoverall_diff,
-  avg_diff = closest_rent_closestavg_diff
+  diff = closest_rent_closestdiff
 )
 rent_final <- rent_final %>% select(-closest_rent_closestState, -closest_rent_closestlat, -closest_rent_closestlng)
 head(rent_final)
 
 write.csv(rent_final, "rent.csv", row.names = FALSE)
+rent_final = read_csv("rent.csv")
+class(rent_final$zip)
+rent_final$zip <- ifelse(
+  nchar(rent_final$zip) == 3,
+  paste0("00", rent_final$zip), 
+  ifelse(nchar(rent_final$zip) == 4,
+         paste0("0", rent_final$zip), 
+         rent_final$zip)
+)
+head(rent_final)
 
 #inner join into 1 big dataset
 names(uszips)
